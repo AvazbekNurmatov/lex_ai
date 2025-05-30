@@ -2,6 +2,7 @@ import scrapy
 import os
 import json
 import pandas as pd
+import pickle
 from tqdm import tqdm
 import logging
 import re
@@ -11,30 +12,120 @@ from scrapy.crawler import CrawlerProcess
 class LexNewSpider2(scrapy.Spider):
     name = "lex_new2"
     allowed_domains = ["lex.uz"]
-    start_urls = [
-        "https://lex.uz/uz/docs/-6445145",
-        "https://lex.uz/uz/docs/-7484334",
-        "https://lex.uz/uz/docs/-7484454",
-        "https://lex.uz/uz/docs/-7485096",
-        "https://lex.uz/uz/docs/-7484114",
-        "https://lex.uz/uz/docs/-7488166",
-        "https://lex.uz/uz/docs/-7487610",
-        "https://lex.uz/uz/docs/-7488164",
-        "https://lex.uz/uz/docs/-7486279",
-        "https://lex.uz/uz/docs/-7486412",
-        "https://lex.uz/uz/docs/-7485775",
-        "https://lex.uz/uz/docs/-7486257",
-        "https://lex.uz/uz/docs/-7487706",
-        "https://lex.uz/uz/docs/-7488160",
-        "https://lex.uz/uz/docs/-7491792",
-        "https://lex.uz/uz/docs/-7491334",
-        "https://lex.uz/uz/docs/-7495608",
-        "https://lex.uz/uz/docs/-7484184"
-    ]
 
     def __init__(self):
-        # Initialize data storage
-        self.scraped_data = []
+        # Load IDs from CSV file
+        self.load_ids_from_csv()
+        # Initialize data storage - now a dictionary with law_act_id as key
+        self.scraped_data = {}
+
+    def load_ids_from_csv(self):
+        """Load the first 100 IDs from numbers.csv"""
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Looking for CSV file: {os.path.abspath('numbers.csv')}")
+        print(f"CSV file exists: {os.path.exists('numbers.csv')}")
+
+        # List files in current directory for debugging
+        files_in_dir = os.listdir('.')
+        csv_files = [f for f in files_in_dir if f.endswith('.csv')]
+        print(f"Files in current directory: {len(files_in_dir)} total")
+        print(f"CSV files found: {csv_files}")
+
+        try:
+            # Read CSV file
+            df = pd.read_csv('numbers.csv')
+
+            print(f"Successfully loaded CSV file!")
+            print(f"CSV shape: {df.shape}")
+            print(f"CSV columns: {list(df.columns)}")
+            print(f"First few rows:")
+            print(df.head())
+
+            # Try to extract numbers from the CSV
+            # Handle different possible column names and structures
+            ids_list = []
+
+            if len(df.columns) == 1:
+                # Single column CSV
+                column_name = df.columns[0]
+                print(f"Using single column: {column_name}")
+                ids_list = df[column_name].tolist()
+            elif 'id' in df.columns:
+                print("Using 'id' column")
+                ids_list = df['id'].tolist()
+            elif 'ID' in df.columns:
+                print("Using 'ID' column")
+                ids_list = df['ID'].tolist()
+            elif 'number' in df.columns:
+                print("Using 'number' column")
+                ids_list = df['number'].tolist()
+            elif 'numbers' in df.columns:
+                print("Using 'numbers' column")
+                ids_list = df['numbers'].tolist()
+            else:
+                # Use first column as default
+                column_name = df.columns[0]
+                print(f"Using first column as default: {column_name}")
+                ids_list = df[column_name].tolist()
+
+            print(f"Extracted {len(ids_list)} IDs from CSV")
+            if ids_list:
+                print(f"First 5 IDs: {ids_list[:5]}")
+                print(f"Sample ID type: {type(ids_list[0])}")
+
+            # Take first 100 IDs
+            first_100_ids = ids_list[:100]
+
+            # Convert to strings and clean if necessary
+            cleaned_ids = []
+            for id_val in first_100_ids:
+                if pd.isna(id_val):  # Skip NaN values
+                    continue
+                elif isinstance(id_val, (int, float)):
+                    cleaned_ids.append(str(int(id_val)))
+                elif isinstance(id_val, str):
+                    # Remove any non-numeric characters
+                    clean_id = ''.join(filter(str.isdigit, id_val))
+                    if clean_id:
+                        cleaned_ids.append(clean_id)
+                else:
+                    print(f"Skipping invalid ID: {id_val} (type: {type(id_val)})")
+
+            print(f"Cleaned {len(cleaned_ids)} valid IDs")
+            if cleaned_ids:
+                print(f"First 5 cleaned IDs: {cleaned_ids[:5]}")
+                print(f"Last 5 cleaned IDs: {cleaned_ids[-5:]}")
+
+            # Create start_urls
+            self.start_urls = [f"https://lex.uz/uz/docs/-{id_num}" for id_num in cleaned_ids]
+
+            print(f"Created {len(self.start_urls)} URLs")
+            print(f"First 3 URLs: {self.start_urls[:3]}")
+            print(f"Last 3 URLs: {self.start_urls[-3:]}")
+
+            if not self.start_urls:
+                raise ValueError("No valid IDs found in CSV file")
+
+        except FileNotFoundError:
+            print("ERROR: numbers.csv file not found in current directory!")
+            print("Available CSV files:", [f for f in os.listdir('.') if f.endswith('.csv')])
+            print("Falling back to original 3 URLs...")
+            self.start_urls = [
+                "https://lex.uz/uz/docs/-6445145",
+                "https://lex.uz/uz/docs/-7484334",
+                "https://lex.uz/uz/docs/-7484454"
+            ]
+        except Exception as e:
+            print(f"ERROR loading CSV file: {e}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            traceback.print_exc()
+            print("Falling back to original 3 URLs...")
+            self.start_urls = [
+                "https://lex.uz/uz/docs/-6445145",
+                "https://lex.uz/uz/docs/-7484334",
+                "https://lex.uz/uz/docs/-7484454"
+            ]
 
     def count_words(self, text):
         """Count words in text, handling None and empty strings"""
@@ -59,6 +150,9 @@ class LexNewSpider2(scrapy.Spider):
 
         print(f"\n=== Processing URL: {response.url} ===")
         print(f"Law Act ID: {law_act_id}")
+
+        # Initialize storage for this specific law act
+        self.scraped_data[law_act_id] = []
 
         # Find all div elements with class "ACT_TEXT lx_elem" or "CLAUSE_DEFAULT lx_elem"
         act_text_divs = response.css('div.ACT_TEXT.lx_elem, div.CLAUSE_DEFAULT.lx_elem')
@@ -202,84 +296,99 @@ class LexNewSpider2(scrapy.Spider):
             consolidated_entries.append(final_entry)
             print(f"  -> Added orphaned CLAUSE_DEFAULT as separate entry")
 
-        # Add consolidated entries to main data storage
-        self.scraped_data.extend(consolidated_entries)
+        # Store consolidated entries for this law act
+        self.scraped_data[law_act_id] = consolidated_entries
 
         print(f"\nOriginal entries: {len(temp_entries)}")
         print(f"Consolidated entries: {len(consolidated_entries)}")
-        print(f"Total entries so far: {len(self.scraped_data)}")
+
+        # Save individual CSV file for this law act immediately
+        self.save_individual_csv(law_act_id, consolidated_entries)
 
         # Log progress
         self.logger.info(
             f"Processed {response.url} - Found {len(act_text_divs)} ACT_TEXT/CLAUSE_DEFAULT elements, consolidated to {len(consolidated_entries)} entries")
 
-    def closed(self, reason):
-        """Called when the spider closes - save data to CSV"""
-        print(f"\n=== Spider finished with reason: {reason} ===")
-        print(f"Total scraped data entries: {len(self.scraped_data)}")
+    def save_individual_csv(self, law_act_id, data_entries):
+        """Save data for individual law act to separate CSV file"""
+        if not data_entries:
+            print(f"No data to save for law act {law_act_id}")
+            return
 
-        if self.scraped_data:
+        try:
             # Create DataFrame
-            df = pd.DataFrame(self.scraped_data)
+            df = pd.DataFrame(data_entries)
 
-            # Save to existing saved.csv file (or create it if it doesn't exist)
-            output_file = 'saved.csv'
+            # Create filename
+            output_file = f'{law_act_id}.csv'
 
+            # Save to CSV
+            df.to_csv(output_file, index=False, encoding='utf-8')
+
+            # Verify file was created
+            if os.path.exists(output_file):
+                file_size = os.path.getsize(output_file)
+                print(f"✓ Successfully saved {len(data_entries)} records to {output_file}")
+                print(f"✓ File size: {file_size} bytes")
+
+                # Show statistics about word counts
+                word_counts = [self.count_words(text) for text in df['text']]
+                print(f"✓ Text statistics for {law_act_id}:")
+                print(f"    Average words per entry: {sum(word_counts) / len(word_counts):.1f}")
+                print(f"    Minimum words: {min(word_counts)}")
+                print(f"    Maximum words: {max(word_counts)}")
+                print(f"    Entries with < 30 words: {sum(1 for wc in word_counts if wc < 30)}")
+            else:
+                print(f"✗ File was not created: {output_file}")
+
+        except Exception as e:
+            print(f"✗ Error saving CSV for {law_act_id}: {e}")
+            # Try saving as backup JSON
             try:
-                df.to_csv(output_file, index=False, encoding='utf-8')
+                backup_file = f'{law_act_id}_backup.json'
+                with open(backup_file, 'w', encoding='utf-8') as f:
+                    json.dump(data_entries, f, ensure_ascii=False, indent=2)
+                print(f"✓ Saved backup as JSON: {backup_file}")
+            except Exception as e2:
+                print(f"✗ Error saving backup for {law_act_id}: {e2}")
 
-                # Verify file was created
-                if os.path.exists(output_file):
-                    file_size = os.path.getsize(output_file)
-                    current_dir = os.getcwd()
-                    full_path = os.path.abspath(output_file)
+    def closed(self, reason):
+        """Called when the spider closes"""
+        print(f"\n=== Spider finished with reason: {reason} ===")
 
-                    print(f"✓ Successfully saved {len(self.scraped_data)} records to {output_file}")
-                    print(f"✓ File location: {full_path}")
-                    print(f"✓ Current directory: {current_dir}")
-                    print(f"✓ File size: {file_size} bytes")
+        total_entries = sum(len(entries) for entries in self.scraped_data.values())
+        total_files = len(self.scraped_data)
 
-                    # Check if file existed before and show appropriate message
-                    print(f"✓ Data saved to saved.csv (overwrote existing file if it existed)")
+        print(f"Total law acts processed: {total_files}")
+        print(f"Total entries across all files: {total_entries}")
 
-                    # Show first few rows as preview
-                    print(f"\nFirst 3 rows preview:")
-                    print(df.head(3).to_string())
+        # List all created files
+        created_files = []
+        for law_act_id in self.scraped_data.keys():
+            csv_file = f'{law_act_id}.csv'
+            if os.path.exists(csv_file):
+                created_files.append(csv_file)
 
-                    # Show statistics about word counts
-                    word_counts = [self.count_words(text) for text in df['text']]
-                    print(f"\nText statistics:")
-                    print(f"  Average words per entry: {sum(word_counts) / len(word_counts):.1f}")
-                    print(f"  Minimum words: {min(word_counts)}")
-                    print(f"  Maximum words: {max(word_counts)}")
-                    print(f"  Entries with < 30 words: {sum(1 for wc in word_counts if wc < 30)}")
+        print(f"\nCreated {len(created_files)} CSV files:")
+        for file in sorted(created_files):
+            file_size = os.path.getsize(file)
+            print(f"  {file} ({file_size} bytes)")
 
-                else:
-                    print(f"✗ File was not created at {output_file}")
-
-            except Exception as e:
-                print(f"✗ Error saving CSV: {e}")
-                # Try saving as backup JSON in current directory
-                try:
-                    backup_file = 'lex_scraped_data_backup.json'
-                    with open(backup_file, 'w', encoding='utf-8') as f:
-                        json.dump(self.scraped_data, f, ensure_ascii=False, indent=2)
-                    print(f"✓ Saved backup as JSON: {os.path.abspath(backup_file)}")
-                except Exception as e2:
-                    print(f"✗ Error saving backup: {e2}")
-
-            self.logger.info(f"Scraped {len(self.scraped_data)} records and saved to current directory")
+        if not created_files:
+            print("✗ No CSV files were created - check the HTML structure")
+            self.logger.warning("No CSV files were created")
         else:
-            print("✗ No data was scraped - check the HTML structure")
-            self.logger.warning("No data was scraped")
+            print(f"✓ All files saved to current directory: {os.getcwd()}")
+            self.logger.info(f"Created {len(created_files)} CSV files with {total_entries} total records")
 
 
 def run_spider():
     """Function to run the spider"""
-    # Print where the file will be saved
-    print("=== File will be saved to current directory ===")
+    # Print where files will be saved
+    print("=== Files will be saved to current directory ===")
     print(f"Current working directory: {os.getcwd()}")
-    print(f"File will be saved as: {os.path.join(os.getcwd(), 'saved.csv')}")
+    print("Input file: numbers.csv")
+    print("Output files: [law_act_id].csv (e.g., 6445145.csv)")
 
     # Configure logging
     logging.basicConfig(
